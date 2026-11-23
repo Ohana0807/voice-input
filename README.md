@@ -53,6 +53,38 @@ Actions →「Build Windows app」→「Run workflow」で、同梱するモデ�
 | qwen3-4b（既定） | 約 2.5GB | 普通 | 実用的 |
 | qwen3-8b | 約 5GB | 遅い | 高い（メモリ 16GB 推奨） |
 
+## Docker で試す（画面なし）
+
+Docker では画面とマイク録音は使えません。音声ファイル（または文字起こし済みの .txt）を渡すと、
+文字起こし → 項目別分析 → テキスト / Excel / Word への書き出しまでをコマンドで行います。
+以下は Docker Desktop を入れた Windows の PowerShell で、リポジトリのフォルダから実行します。
+
+```powershell
+# 1. イメージを作る（初回のみ。数分かかります）
+docker compose build
+
+# 2. モデルを ./models にダウンロードする（初回のみ）
+docker compose run --rm --entrypoint python voice-input scripts/download_model.py small
+docker compose run --rm --entrypoint python voice-input scripts/download_llm.py qwen3-4b
+
+# 3. 試したい音声を ./data に置いて実行する
+docker compose run --rm voice-input /data/sample.m4a
+```
+
+結果は `./data` に `sample.txt`（文字起こし）、`sample_分析.xlsx`、`sample_分析.docx` として保存されます。
+
+よく使うオプション:
+
+| オプション | 内容 |
+|---|---|
+| `--list` | 使えるモデルとテンプレートを表示 |
+| `--no-analyze` | 文字起こしだけ行う |
+| `--template 業務改善ヒアリング` | 分析テンプレートを選ぶ |
+| `--lang en` / `--lang auto` | 言語（既定は日本語） |
+| `--model medium` | Whisper モデルを選ぶ |
+
+Docker Desktop のメモリ割り当ては 8GB 以上にしてください（設定 → Resources）。
+
 ## 開発者向け
 
 ```powershell

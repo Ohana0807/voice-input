@@ -5,4 +5,5 @@ build/
 dist/
 *.spec
 models/
+data/
 selftest.log

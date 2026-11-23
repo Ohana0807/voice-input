@@ -1,0 +1,8 @@
+# 使い方は README の「Docker で試す」を参照
+services:
+  voice-input:
+    build: .
+    image: voice-input
+    volumes:
+      - ./models:/app/models   # Whisper / 分析用モデル
+      - ./data:/data           # 入力ファイルと出力先

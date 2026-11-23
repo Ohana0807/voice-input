@@ -3,7 +3,6 @@ name: Build Windows app
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       model:
@@ -11,15 +10,22 @@ on:
         type: choice
         default: small
         options: [tiny, base, small, medium, large-v3-turbo]
+      llm:
+        description: 同梱する分析用言語モデル
+        type: choice
+        default: qwen3-4b
+        options: [qwen3-1.7b, qwen3-4b, qwen3-8b]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 90
     env:
       MODEL: ${{ inputs.model || 'small' }}
+      LLM: ${{ inputs.llm || 'qwen3-4b' }}
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
@@ -31,9 +37,9 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: ./build.ps1 -Model $env:MODEL
+        run: ./build.ps1 -Model $env:MODEL -Llm $env:LLM
 
-      - name: Self test (exe を実際に起動して文字起こしまで確認)
+      - name: Self test (exe を起動して文字起こし・分析・書き出しまで確認)
         shell: pwsh
         run: |
           $p = Start-Process dist/VoiceInput/VoiceInput.exe -ArgumentList '--selftest' -Wait -PassThru
@@ -43,15 +49,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: VoiceInput-windows-${{ env.MODEL }}
+          name: VoiceInput-windows-${{ env.MODEL }}-${{ env.LLM }}
           path: dist/VoiceInput
 
-      - name: Zip for release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        run: Compress-Archive -Path dist/VoiceInput -DestinationPath VoiceInput-windows-$env:MODEL.zip
-
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: VoiceInput-windows-*.zip

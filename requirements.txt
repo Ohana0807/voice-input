@@ -1,3 +1,6 @@
 faster-whisper>=1.1.0
 sounddevice>=0.4.6
 numpy
+llama-cpp-python>=0.3.8
+openpyxl
+python-docx

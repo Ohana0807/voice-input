@@ -1,0 +1,57 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 同梱する Whisper モデル
+        type: choice
+        default: small
+        options: [tiny, base, small, medium, large-v3-turbo]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      MODEL: ${{ inputs.model || 'small' }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1 -Model $env:MODEL
+
+      - name: Self test (exe を実際に起動して文字起こしまで確認)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/VoiceInput/VoiceInput.exe -ArgumentList '--selftest' -Wait -PassThru
+          Get-Content dist/VoiceInput/selftest.log
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Remove-Item dist/VoiceInput/selftest.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoiceInput-windows-${{ env.MODEL }}
+          path: dist/VoiceInput
+
+      - name: Zip for release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: Compress-Archive -Path dist/VoiceInput -DestinationPath VoiceInput-windows-$env:MODEL.zip
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: VoiceInput-windows-*.zip

@@ -36,6 +36,7 @@ class Recorder:
         self._stream = None
         self._sr = TARGET_SR
         self._lock = threading.Lock()
+        self._read_pos = 0  # read_new で渡し済みのチャンク数
         self.level = 0.0  # 直近の音量（0〜1）
 
     @property
@@ -48,6 +49,7 @@ class Recorder:
         info = sd.query_devices(kind="input")
         self._sr = int(info["default_samplerate"]) or 44100
         self._chunks = []
+        self._read_pos = 0
 
         def callback(indata, frames, time, status):  # noqa: ARG001
             mono = indata[:, 0].copy() if indata.ndim > 1 else indata.copy()
@@ -64,8 +66,20 @@ class Recorder:
         with self._lock:
             return sum(c.size for c in self._chunks) / self._sr
 
+    def read_new(self) -> np.ndarray:
+        """前回の呼び出し以降に録れた分を 16kHz モノラル float32 で返す（録音中の逐次文字起こし用）。"""
+        with self._lock:
+            new = self._chunks[self._read_pos :]
+            self._read_pos = len(self._chunks)
+        if not new:
+            return np.zeros(0, np.float32)
+        return resample(np.concatenate(new), self._sr)
+
     def stop(self) -> np.ndarray:
-        """録音を止め、16kHz モノラル float32 の配列を返す。"""
+        """録音を止め、録音全体を 16kHz モノラル float32 の配列で返す。
+
+        read_new でまだ読んでいない分は、停止後も read_new で受け取れる。
+        """
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
@@ -73,5 +87,4 @@ class Recorder:
         self.level = 0.0
         with self._lock:
             audio = np.concatenate(self._chunks) if self._chunks else np.zeros(0, np.float32)
-            self._chunks = []
         return resample(audio, self._sr)

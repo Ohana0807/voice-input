@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .live import LiveSession
 from .recorder import Recorder, save_wav
 from .transcriber import Transcriber, app_dir, format_time, list_models, models_dir
 
@@ -34,6 +35,7 @@ class App:
         self.busy = False
         self.stop_flag = threading.Event()
         self.last_recording: np.ndarray | None = None
+        self.backlog = 0.0  # 録音中、まだ文字起こししていない秒数
 
         root.title(APP_NAME)
         root.geometry("760x560")
@@ -94,7 +96,7 @@ class App:
             self.rec_btn.state(["disabled"])
             self.open_btn.state(["disabled"])
         else:
-            self.status_var.set("準備完了。「● 録音開始」を押すか、音声ファイルを開いてください。")
+            self.status_var.set("準備完了。「● 録音開始」を押すと、話した内容がその場で文字になります。")
             # 最初の文字起こしを待たせないよう、裏でモデルを先読みしておく
             threading.Thread(target=self._preload, args=(models[0],), daemon=True).start()
 
@@ -139,6 +141,8 @@ class App:
                 elif kind == "done":
                     self.set_busy(False)
                     self.status_var.set(payload)
+                elif kind == "rec_reset":
+                    self.rec_btn.config(text="● 録音開始")
                 elif kind == "error":
                     self.set_busy(False)
                     self.status_var.set("エラーが発生しました")
@@ -147,7 +151,10 @@ class App:
             pass
         if self.recorder.recording:
             bars = "▮" * int(self.recorder.level * 10)
-            self.status_var.set(f"録音中… {format_time(self.recorder.elapsed())}  {bars}")
+            msg = f"録音中… {format_time(self.recorder.elapsed())}  {bars}"
+            if self.backlog >= 15:
+                msg += f"（文字起こしが {int(self.backlog)} 秒遅れています）"
+            self.status_var.set(msg)
         self.root.after(100, self.poll)
 
     def cancel(self) -> None:
@@ -159,24 +166,61 @@ class App:
         from tkinter import messagebox
 
         if self.recorder.recording:
-            audio = self.recorder.stop()
+            self.last_recording = self.recorder.stop()
             self.rec_btn.config(text="● 録音開始")
-            if audio.size < 16000 * 0.5:
-                self.status_var.set("録音が短すぎます。")
-                self.set_busy(False)
-                return
-            self.last_recording = audio
-            self.save_wav_btn.state(["!disabled"])
-            self.start_transcription(audio, "録音 " + _now())
-        else:
+            self.rec_btn.state(["disabled"])  # 残りの文字起こしが終わるまで
+            self.cancel_btn.state(["!disabled"])
+            if self.last_recording.size >= 16000 * 0.5:
+                self.save_wav_btn.state(["!disabled"])
+            self.events.put(("status", "残りを文字起こし中…"))
+            return
+        if self.busy:
+            return
+        try:
+            self.recorder.start()
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(APP_NAME, f"マイクを開けませんでした。\n\n{e}")
+            return
+        self.stop_flag.clear()
+        self.set_busy(True)
+        self.rec_btn.state(["!disabled"])
+        self.cancel_btn.state(["disabled"])
+        self.rec_btn.config(text="■ 録音停止")
+        self.backlog = 0.0
+        model = self.model_var.get()
+        language = LANGUAGES[self.lang_var.get()]
+        with_ts = self.ts_var.get()
+        if self.text.get("1.0", "end-1c").strip():
+            self.text.insert("end", "\n")
+        self.text.insert("end", f"―― 録音 {_now()} ――\n")
+
+        def emit(seg) -> None:
+            line = f"[{format_time(seg.start)}] {seg.text}" if with_ts else seg.text
+            self.events.put(("text", line + "\n"))
+
+        def set_backlog(sec: float) -> None:
+            self.backlog = sec
+
+        def work() -> None:
             try:
-                self.recorder.start()
-            except Exception as e:  # noqa: BLE001
-                messagebox.showerror(APP_NAME, f"マイクを開けませんでした。\n\n{e}")
-                return
-            self.rec_btn.config(text="■ 録音停止")
-            self.open_btn.state(["disabled"])
-            self.model_box.state(["disabled"])
+                self.transcriber.load(model)
+                session = LiveSession(
+                    self.recorder.read_new,
+                    lambda: self.recorder.recording,
+                    self.transcriber,
+                    language,
+                    emit,
+                    set_backlog,
+                )
+                count = session.run(self.stop_flag.is_set)
+                self.events.put(("done", "完了しました。" if count else "音声を聞き取れませんでした。"))
+            except Exception:  # noqa: BLE001
+                if self.recorder.recording:
+                    self.recorder.stop()
+                self.events.put(("rec_reset", None))
+                self.events.put(("error", traceback.format_exc(limit=3)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def open_file(self) -> None:
         from tkinter import filedialog
@@ -289,6 +333,18 @@ def selftest() -> int:
         lines.append(f"transcribe ok: {len(segs)} segments")
         segs = list(t.transcribe(tone, language="ja", vad=True))
         lines.append(f"transcribe (vad) ok: {len(segs)} segments")
+
+        # 録音中の逐次文字起こし（マイクの代わりに 0.2 秒ずつ音を渡す）
+        audio = np.concatenate([tone, np.zeros(sr, np.float32), tone, np.zeros(sr // 5, np.float32)])
+        pos = [0]
+
+        def feed() -> np.ndarray:
+            a = audio[pos[0] : pos[0] + 3200]
+            pos[0] += 3200
+            return a
+
+        n = LiveSession(feed, lambda: pos[0] < audio.size, t, "ja", lambda s: None).run()
+        lines.append(f"live ok: {n} segments")
         lines.append("SELFTEST OK")
     except Exception:  # noqa: BLE001
         lines.append(traceback.format_exc())

@@ -2,7 +2,6 @@ name: Build Windows app
 
 on:
   push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       model:
@@ -10,11 +9,6 @@ on:
         type: choice
         default: small
         options: [tiny, base, small, medium, large-v3-turbo]
-      llm:
-        description: 同梱する分析用言語モデル
-        type: choice
-        default: qwen3-4b
-        options: [qwen3-1.7b, qwen3-4b, qwen3-8b]
 
 permissions:
   contents: read
@@ -22,10 +16,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
       MODEL: ${{ inputs.model || 'small' }}
-      LLM: ${{ inputs.llm || 'qwen3-4b' }}
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +30,9 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: ./build.ps1 -Model $env:MODEL -Llm $env:LLM
+        run: ./build.ps1 -Model $env:MODEL
 
-      - name: Self test (exe を起動して文字起こし・分析・書き出しまで確認)
+      - name: Self test (exe を起動して文字起こしまで確認)
         shell: pwsh
         run: |
           $p = Start-Process dist/VoiceInput/VoiceInput.exe -ArgumentList '--selftest' -Wait -PassThru
@@ -49,6 +42,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: VoiceInput-windows-${{ env.MODEL }}-${{ env.LLM }}
+          name: VoiceInput-windows-${{ env.MODEL }}
           path: dist/VoiceInput
-
